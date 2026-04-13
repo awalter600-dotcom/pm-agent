@@ -44,13 +44,31 @@ Idea: ${input}
 
     const data = await response.json();
 
-    const output =
-      data?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "No response from Gemini";
+    // 🔴 DEBUG: show full Gemini response in logs
+    console.log("Gemini response:", JSON.stringify(data, null, 2));
+
+    // 🔴 If API failed
+    if (!response.ok) {
+      return res.status(500).json({
+        error: "Gemini API failed",
+        details: data
+      });
+    }
+
+    const output = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+    // 🔴 If no output returned
+    if (!output) {
+      return res.status(500).json({
+        error: "No content returned from Gemini",
+        raw: data
+      });
+    }
 
     return res.status(200).json({
       prd: output
     });
+
   } catch (err) {
     return res.status(500).json({
       error: err.message
