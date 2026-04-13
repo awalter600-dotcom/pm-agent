@@ -1,4 +1,5 @@
 import { GoogleGenAI } from "@google/genai";
+import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -12,29 +13,45 @@ export default async function handler(req, res) {
   }
 
   try {
+    // -------------------------
+    // 1. GEMINI GENERATION
+    // -------------------------
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY
     });
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `
-You are a senior Product Manager.
-
-Write a structured PRD:
-
-Problem:
-Users:
-Goals:
-Features:
-Success Metrics:
-
-Idea: ${input}
-`
+      model: "gemini-1.5-flash",
+      contents: `Write a structured PRD for: ${input}`
     });
 
+    const prd = response.text;
+
+    // -------------------------
+    // 2. SUPABASE SAVE
+    // -------------------------
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
+
+    const { error } = await supabase.from("prds").insert([
+      {
+        input,
+        prd
+      }
+    ]);
+
+    if (error) {
+      console.error("Supabase error:", error);
+    }
+
+    // -------------------------
+    // 3. RETURN RESPONSE
+    // -------------------------
     return res.status(200).json({
-      prd: response.text
+      prd,
+      saved: !error
     });
 
   } catch (err) {
