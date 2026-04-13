@@ -1,12 +1,8 @@
 {
   "name": "pm-agent",
   "version": "1.0.0",
-  "description": "Product Manager Agent API",
-  "main": "api/generate-prd.js",
-  "scripts": {
-    "start": "node api/generate-prd.js"
-  },
+  "type": "module",
   "dependencies": {
-    "node-fetch": "^3.3.2"
+    "@google/genai": "^1.0.0"
   }
 }
