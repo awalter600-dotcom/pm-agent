@@ -49,7 +49,7 @@ Idea: ${input}
   // GEMINI GENERATION WITH FALLBACK
   // -------------------------
   async function generatePRD() {
-    const models = ["gemini-2.5-flash-lite", "gemini-2.0-flash-lite"];
+    const models = ["gemini-2.5-flash-lite", "gemini-2.5-flash-lite-001"];
 
     for (const model of models) {
       try {
