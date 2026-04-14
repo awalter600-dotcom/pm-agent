@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "@google/genai": "^1.0.0",
+    "groq-sdk": "^1.0.0",
     "@supabase/supabase-js": "^2.0.0"
   }
 }
