@@ -4,29 +4,55 @@ import { createClient } from "@supabase/supabase-js";
 export default async function handler(req, res) {
   const startTime = Date.now();
 
-  if (req.method !== "POST") {
-    return res.status(405).json({ error: "Use POST" });
-  }
+  try {
+    // -------------------------
+    // METHOD CHECK
+    // -------------------------
+    if (req.method !== "POST") {
+      return res.status(405).json({ error: "Use POST" });
+    }
 
-  const { input } = req.body;
+    // -------------------------
+    // INPUT SAFETY (VERY IMPORTANT)
+    // -------------------------
+    const input =
+      req.body?.input ||
+      req.body?.idea ||
+      req.body?.text;
 
-  if (!input) {
-    return res.status(400).json({ error: "Missing input" });
-  }
+    if (!input || typeof input !== "string") {
+      return res.status(400).json({
+        error: "Missing or invalid input"
+      });
+    }
 
-  // -------------------------
-  // CLIENTS
-  // -------------------------
-  const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-  });
+    // -------------------------
+    // ENV CHECK (FAIL FAST)
+    // -------------------------
+    if (!process.env.GROQ_API_KEY) {
+      throw new Error("Missing GROQ_API_KEY");
+    }
 
-  const supabase = createClient(
-    process.env.SUPABASE_URL,
-    process.env.SUPABASE_ANON_KEY
-  );
+    if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY) {
+      throw new Error("Missing Supabase env vars");
+    }
 
-  const prompt = `
+    // -------------------------
+    // CLIENTS
+    // -------------------------
+    const groq = new Groq({
+      apiKey: process.env.GROQ_API_KEY
+    });
+
+    const supabase = createClient(
+      process.env.SUPABASE_URL,
+      process.env.SUPABASE_ANON_KEY
+    );
+
+    // -------------------------
+    // PROMPT
+    // -------------------------
+    const prompt = `
 You are a senior Product Manager.
 
 Write a structured PRD with:
@@ -34,85 +60,104 @@ Write a structured PRD with:
 - Users
 - Goals
 - Features
-- Success metrics
+- Success Metrics
 
-Idea: ${input}
+Return clean markdown only.
+
+Idea:
+${input}
 `;
 
-  // -------------------------
-  // GROQ GENERATION
-  // -------------------------
-  async function generatePRD() {
-    const response = await groq.chat.completions.create({
-      model: "llama-3.1-8b-instant",
-      messages: [
-        {
-          role: "system",
-          content: "You are a senior Product Manager who writes clear PRDs."
-        },
-        {
-          role: "user",
-          content: prompt
+    // -------------------------
+    // LLM CALL (WITH RETRY)
+    // -------------------------
+    async function generateWithRetry(retries = 2) {
+      let lastError;
+
+      for (let i = 0; i <= retries; i++) {
+        try {
+          const response = await groq.chat.completions.create({
+            model: "llama-3.1-8b-instant",
+            messages: [
+              { role: "user", content: prompt }
+            ],
+            temperature: 0.7
+          });
+
+          const text = response?.choices?.[0]?.message?.content;
+
+          if (text) {
+            return text;
+          }
+
+          throw new Error("Empty LLM response");
+        } catch (err) {
+          lastError = err;
+          console.log(`LLM attempt ${i + 1} failed:`, err.message);
         }
-      ]
-    });
+      }
 
-    const text = response?.choices?.[0]?.message?.content;
-
-    if (!text) {
-      throw new Error("No response from Groq");
+      throw lastError;
     }
 
-    return {
-      text,
-      modelUsed: "llama-3.1-8b-instant"
-    };
-  }
+    const prdText = await generateWithRetry();
 
-  // -------------------------
-  // MAIN LOGIC
-  // -------------------------
-  try {
-    const result = await generatePRD();
+    // -------------------------
+    // LATENCY
+    // -------------------------
     const latency_ms = Date.now() - startTime;
 
-    const { error: dbError } = await supabase
-      .from("prd_outputs")
-      .insert([
-        {
-          idea: input,
-          prd: result.text,
-          model_used: result.modelUsed,
-          latency_ms,
-          success: true
-        }
-      ]);
+    // -------------------------
+    // SUPABASE SAVE (SAFE - NEVER CRASH API)
+    // -------------------------
+    let dbSaved = true;
 
+    try {
+      const { error } = await supabase
+        .from("prd_outputs")
+        .insert([
+          {
+            idea: input,
+            prd: prdText,
+            model_used: "llama-3.1-8b-instant",
+            latency_ms,
+            success: true
+          }
+        ]);
+
+      if (error) {
+        console.log("Supabase insert error:", error);
+        dbSaved = false;
+      }
+    } catch (dbErr) {
+      console.log("Supabase crash:", dbErr);
+      dbSaved = false;
+    }
+
+    // -------------------------
+    // RESPONSE
+    // -------------------------
     return res.status(200).json({
-      prd: result.text,
-      model_used: result.modelUsed,
+      prd: prdText,
+      model_used: "llama-3.1-8b-instant",
       latency_ms,
       success: true,
-      saved: !dbError
+      saved: dbSaved
     });
 
   } catch (err) {
+    // -------------------------
+    // GLOBAL ERROR HANDLER
+    // -------------------------
     const latency_ms = Date.now() - startTime;
 
-    await supabase.from("prd_outputs").insert([
-      {
-        idea: input,
-        prd: err.message || "FAILED",
-        model_used: "groq-failed",
-        latency_ms,
-        success: false
-      }
-    ]);
+    console.error("API ERROR:", err);
 
     return res.status(500).json({
       error: err.message,
+      latency_ms,
       success: false,
-      latency_ms
+      saved: false
     });
   }
 }
