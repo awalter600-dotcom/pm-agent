@@ -38,59 +38,64 @@ Idea: ${input}
 `;
 
   // -------------------------
-  // HELPER: CHECK VALID RESPONSE
-  // -------------------------
-  function isValidResponse(response) {
-    return response && response.text && response.text.length > 0;
-  }
-
-  // -------------------------
-  // GEMINI WITH PROPER FALLBACK
+  // GEMINI CALL WITH SAFE FALLBACK LOOP
   // -------------------------
   async function generatePRD() {
-    console.log("Trying model: gemini-2.5-flash");
+    const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
 
-    let response;
+    for (const model of models) {
+      try {
+        console.log("Trying model:", model);
 
-    try {
-      response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
-        contents: prompt
-      });
-    } catch (err) {
-      console.log("Flash request failed:", err.message);
+        const response = await ai.models.generateContent({
+          model,
+          contents: prompt
+        });
+
+        // -------------------------
+        // CRITICAL FIX:
+        // Handle API-level errors inside response
+        // -------------------------
+        if (response?.error) {
+          console.log(`Model ${model} returned API error:`, response.error);
+          continue;
+        }
+
+        if (response?.text && response.text.length > 0) {
+          return {
+            text: response.text,
+            modelUsed: model
+          };
+        }
+
+        console.log(`Model ${model} returned empty response`);
+
+      } catch (err) {
+        console.log(`Model ${model} threw error:`, err.message);
+      }
     }
 
-    // If flash failed OR returned empty → fallback
-    if (!isValidResponse(response)) {
-      console.log("Switching to gemini-2.5-pro");
-
-      response = await ai.models.generateContent({
-        model: "gemini-2.5-pro",
-        contents: prompt
-      });
-    }
-
-    // Final validation
-    if (!isValidResponse(response)) {
-      throw new Error("Both models failed to generate a PRD");
-    }
-
-    return response.text;
+    throw new Error("All Gemini models failed");
   }
 
   // -------------------------
   // MAIN EXECUTION
   // -------------------------
   try {
-    const prd = await generatePRD();
+    const result = await generatePRD();
 
     // -------------------------
-    // SAVE TO SUPABASE
+    // SUPABASE SAVE (non-blocking)
     // -------------------------
     const { error: dbError } = await supabase
       .from("prds")
-      .insert([{ input, prd }]);
+      .insert([
+        {
+          input,
+          prd: result.text,
+          model_used: result.modelUsed
+        }
+      ]);
 
     if (dbError) {
       console.error("Supabase error:", dbError);
@@ -100,9 +105,9 @@ Idea: ${input}
     // RESPONSE
     // -------------------------
     return res.status(200).json({
-      prd,
-      saved: !dbError,
-      model_used: "gemini-2.5-flash or gemini-2.5-pro"
+      prd: result.text,
+      model_used: result.modelUsed,
+      saved: !dbError
     });
 
   } catch (err) {
