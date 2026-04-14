@@ -19,7 +19,8 @@ export default async function handler(req, res) {
     const ai = new GoogleGenAI({
       apiKey: process.env.GEMINI_API_KEY
     });
-
+    console.log("MODEL USED: gemini-2.5-flash");
+    
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
       contents: `Write a structured PRD for: ${input}`
@@ -51,7 +52,8 @@ export default async function handler(req, res) {
     // -------------------------
     return res.status(200).json({
       prd,
-      saved: !error
+      saved: !error,
+      model: "gemini-2.5-flash"
     });
 
   } catch (err) {
