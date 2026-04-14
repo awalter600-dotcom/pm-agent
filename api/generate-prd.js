@@ -88,10 +88,10 @@ Idea: ${input}
     // SUPABASE SAVE (non-blocking)
     // -------------------------
     const { error: dbError } = await supabase
-      .from("prds")
+      .from("prd_outputs")
       .insert([
         {
-          input,
+          idea: input,
           prd: result.text,
           model_used: result.modelUsed
         }
