@@ -2,6 +2,8 @@ import { GoogleGenAI } from "@google/genai";
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
+  const startTime = Date.now();
+
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST" });
   }
@@ -38,7 +40,7 @@ Idea: ${input}
 `;
 
   // -------------------------
-  // GEMINI CALL WITH SAFE FALLBACK LOOP
+  // GEMINI GENERATION (FLASH → PRO FALLBACK)
   // -------------------------
   async function generatePRD() {
     const models = ["gemini-2.5-flash", "gemini-2.5-pro"];
@@ -52,40 +54,36 @@ Idea: ${input}
           contents: prompt
         });
 
-        // -------------------------
-        // CRITICAL FIX:
-        // Handle API-level errors inside response
-        // -------------------------
         if (response?.error) {
-          console.log(`Model ${model} returned API error:`, response.error);
+          console.log(`Model ${model} returned error:`, response.error);
           continue;
         }
 
-        if (response?.text && response.text.length > 0) {
+        if (response?.text) {
           return {
             text: response.text,
             modelUsed: model
           };
         }
 
-        console.log(`Model ${model} returned empty response`);
-
       } catch (err) {
-        console.log(`Model ${model} threw error:`, err.message);
+        console.log(`Model ${model} failed:`, err.message);
       }
     }
 
-    throw new Error("All Gemini models failed");
+    throw new Error("All models failed to generate PRD");
   }
 
   // -------------------------
-  // MAIN EXECUTION
+  // MAIN LOGIC
   // -------------------------
   try {
     const result = await generatePRD();
 
+    const latency_ms = Date.now() - startTime;
+
     // -------------------------
-    // SUPABASE SAVE (non-blocking)
+    // SUPABASE INSERT (SUCCESS)
     // -------------------------
     const { error: dbError } = await supabase
       .from("prd_outputs")
@@ -93,28 +91,48 @@ Idea: ${input}
         {
           idea: input,
           prd: result.text,
-          model_used: result.modelUsed
+          model_used: result.modelUsed,
+          latency_ms,
+          success: true
         }
       ]);
 
     if (dbError) {
-      console.error("Supabase error:", dbError);
+      console.error("Supabase insert error:", dbError);
     }
 
-    // -------------------------
-    // RESPONSE
-    // -------------------------
     return res.status(200).json({
       prd: result.text,
       model_used: result.modelUsed,
+      latency_ms,
+      success: true,
       saved: !dbError
     });
 
   } catch (err) {
+    const latency_ms = Date.now() - startTime;
+
     console.error("FINAL ERROR:", err);
 
+    // -------------------------
+    // SUPABASE INSERT (FAILURE LOG)
+    // -------------------------
+    await supabase
+      .from("prd_outputs")
+      .insert([
+        {
+          idea: input,
+          prd: err.message || "FAILED",
+          model_used: "none",
+          latency_ms,
+          success: false
+        }
+      ]);
+
     return res.status(500).json({
-      error: err.message
+      error: err.message,
+      latency_ms,
+      success: false
     });
   }
 }
