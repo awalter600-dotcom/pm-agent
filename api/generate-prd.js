@@ -1,12 +1,9 @@
-import { GoogleGenAI } from "@google/genai";
+import Groq from "groq-sdk";
 import { createClient } from "@supabase/supabase-js";
 
 export default async function handler(req, res) {
   const startTime = Date.now();
 
-  // -------------------------
-  // METHOD CHECK
-  // -------------------------
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Use POST" });
   }
@@ -18,10 +15,10 @@ export default async function handler(req, res) {
   }
 
   // -------------------------
-  // INIT CLIENTS
+  // CLIENTS
   // -------------------------
-  const ai = new GoogleGenAI({
-    apiKey: process.env.GEMINI_API_KEY
+  const groq = new Groq({
+    apiKey: process.env.GROQ_API_KEY
   });
 
   const supabase = createClient(
@@ -29,9 +26,6 @@ export default async function handler(req, res) {
     process.env.SUPABASE_ANON_KEY
   );
 
-  // -------------------------
-  // PROMPT
-  // -------------------------
   const prompt = `
 You are a senior Product Manager.
 
@@ -46,34 +40,33 @@ Idea: ${input}
 `;
 
   // -------------------------
-  // GEMINI GENERATION WITH FALLBACK
+  // GROQ GENERATION
   // -------------------------
   async function generatePRD() {
-    const models = ["gemini-2.5-flash-lite", "gemini-2.5-flash-lite-001"];
-
-    for (const model of models) {
-      try {
-        console.log("Trying model:", model);
-
-        const response = await ai.models.generateContent({
-          model,
-          contents: prompt
-        });
-
-        const text = response.text();
-
-        if (text && text.length > 0) {
-          return {
-            text,
-            modelUsed: model
-          };
+    const response = await groq.chat.completions.create({
+      model: "llama-3.1-8b-instant",
+      messages: [
+        {
+          role: "system",
+          content: "You are a senior Product Manager who writes clear PRDs."
+        },
+        {
+          role: "user",
+          content: prompt
         }
-      } catch (err) {
-        console.log(`Model ${model} failed:`, err.message);
-      }
+      ]
+    });
+
+    const text = response?.choices?.[0]?.message?.content;
+
+    if (!text) {
+      throw new Error("No response from Groq");
     }
 
-    throw new Error("All models failed to generate PRD");
+    return {
+      text,
+      modelUsed: "llama-3.1-8b-instant"
+    };
   }
 
   // -------------------------
@@ -83,26 +76,18 @@ Idea: ${input}
     const result = await generatePRD();
     const latency_ms = Date.now() - startTime;
 
-    // -------------------------
-    // SUPABASE INSERT (SUCCESS)
-    // -------------------------
-    const { error: dbError } = await supabase.from("prd_outputs").insert([
-      {
-        idea: input,
-        prd: result.text,
-        model_used: result.modelUsed,
-        latency_ms,
-        success: true
-      }
-    ]);
+    const { error: dbError } = await supabase
+      .from("prd_outputs")
+      .insert([
+        {
+          idea: input,
+          prd: result.text,
+          model_used: result.modelUsed,
+          latency_ms,
+          success: true
+        }
+      ]);
 
-    if (dbError) {
-      console.error("Supabase insert error:", dbError);
-    }
-
-    // -------------------------
-    // RESPONSE
-    // -------------------------
     return res.status(200).json({
       prd: result.text,
       model_used: result.modelUsed,
@@ -114,29 +99,20 @@ Idea: ${input}
   } catch (err) {
     const latency_ms = Date.now() - startTime;
 
-    console.error("FINAL ERROR:", err);
-
-    // -------------------------
-    // FAIL SAFE SUPABASE LOG
-    // -------------------------
     await supabase.from("prd_outputs").insert([
       {
         idea: input,
         prd: err.message || "FAILED",
-        model_used: "none",
+        model_used: "groq-failed",
         latency_ms,
         success: false
       }
     ]);
 
-    // -------------------------
-    // ERROR RESPONSE
-    // -------------------------
     return res.status(500).json({
       error: err.message,
-      latency_ms,
       success: false,
-      saved: false
+      latency_ms
     });
   }
 }
