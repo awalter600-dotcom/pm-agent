@@ -4,7 +4,6 @@
   "type": "module",
   "dependencies": {
     "groq-sdk": "^1.0.0",
-    "@supabase/supabase-js": "^2.0.0",
-    "react-markdown": "^9.0.0"
+    "@supabase/supabase-js": "^2.0.0"
   }
 }
