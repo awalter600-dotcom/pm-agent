@@ -12,7 +12,8 @@ export default async function handler(req, res) {
     const {
       input,
       level = "standard",
-      stage = "idea"
+      stage = "idea",
+      answers = []
     } = req.body || {};
 
     if (!input || typeof input !== "string") {
@@ -35,52 +36,132 @@ export default async function handler(req, res) {
     );
 
     // -------------------------
+    // REFINEMENT CONTEXT
+    // -------------------------
+    const refinementContext =
+      answers?.length > 0
+        ? `\n\nUSER REFINEMENTS:\n${answers
+            .map((a, i) => `${i + 1}. ${a}`)
+            .join("\n")}`
+        : "";
+
+    // -------------------------
     // PROMPT
     // -------------------------
     const prompt = `
-You are a Principal Product Manager at a top-tier SaaS company.
+You are a Principal Product Manager AND Product Coach.
+
+Your job:
+1) Generate a high-quality PRD
+2) Educate the user as you go (light coaching)
+3) Push toward outcome-driven thinking (not feature-driven)
+4) Help refine the product through questions
+
+----------------------------------
 
 PRD LEVEL: ${level.toUpperCase()}
 PRODUCT STAGE: ${stage.toUpperCase()}
 
+----------------------------------
+
 LEVEL GUIDELINES:
 
-If SIMPLE:
+SIMPLE:
 - Very concise
 - High-level only
+- Minimal detail
 
-If STANDARD:
-- Balanced detail
+STANDARD:
+- Balanced detail and structure
 
-If DETAILED:
-- Deep and execution-ready
+DETAILED:
+- Deep, execution-ready PRD
+
+----------------------------------
 
 STAGE GUIDELINES:
 
-If IDEA:
-- Focus on problem clarity
-- MVP only
+IDEA:
+- Focus on problem clarity and validation
+- MVP mindset only
 
-If MVP:
-- Core features + iteration
+MVP:
+- Focus on core functionality and usability
 
-If GROWTH:
-- Scalability, integrations, edge cases
+GROWTH:
+- Focus on scaling, retention, optimization
 
-FORMAT:
+----------------------------------
 
-Use bold section headers:
+OUTPUT STRUCTURE (STRICT):
+
+Return clean markdown with these sections:
+
+**Product Definition**
+
+- What the product is
+- Who it is for
+- What problem it solves
+- Keep it simple and clear
 
 **Problem**
+
+- Clearly define the user problem
+- Explain why it matters
+
 **Users**
-**Goals**
+
+- Primary users
+- Secondary users
+- Be specific (avoid vague personas)
+
+**Goals (Outcomes)**
+
+- MUST be outcome-driven (not features)
+- Focus on measurable impact
+- Example: “Increase retention by 15%”
+- NOT: “Build a dashboard”
+
 **Features**
+
+- Only include features that support goals
+- Align with stage (Idea/MVP/Growth)
+
 **Success Metrics**
 
-Return clean markdown only.
+- Define measurable success criteria
+- Tie directly to outcomes
+
+**Next Steps**
+
+- Ask EXACTLY 3 questions
+- Must improve clarity, scope, or outcomes
+- Be specific and actionable
+
+----------------------------------
+
+EDUCATION / COACHING RULES:
+
+- Subtly guide the user toward better product thinking
+- If goals are feature-based → convert to outcomes
+- If users are vague → clarify them
+- If scope is too broad → narrow it
+- Do NOT be overly verbose or preachy
+
+----------------------------------
+
+FORMATTING RULES:
+
+- Add TWO line breaks after section headers
+- Add ONE line break between bullets
+- Keep spacing clean and readable
+
+----------------------------------
 
 PRODUCT IDEA:
 ${input}
+
+${refinementContext}
 `;
 
     // -------------------------
@@ -106,14 +187,21 @@ ${input}
     const latency_ms = Date.now() - startTime;
 
     // -------------------------
-    // SAVE TO SUPABASE
+    // CLEAN FORMATTING
+    // -------------------------
+    const formattedText = text
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
+    // -------------------------
+    // SUPABASE INSERT (SUCCESS)
     // -------------------------
     const { error: dbError } = await supabase
       .from("prd_outputs")
       .insert([
         {
           idea: input,
-          prd: text.trim(),
+          prd: formattedText,
           model_used: "llama-3.1-8b-instant",
           latency_ms,
           success: true,
@@ -126,8 +214,11 @@ ${input}
       console.error("Supabase insert error:", dbError);
     }
 
+    // -------------------------
+    // RESPONSE
+    // -------------------------
     return res.status(200).json({
-      prd: text.trim(),
+      prd: formattedText,
       model_used: "llama-3.1-8b-instant",
       latency_ms,
       success: true,
@@ -141,6 +232,9 @@ ${input}
 
     console.error("FINAL ERROR:", err);
 
+    // -------------------------
+    // FAIL LOGGING
+    // -------------------------
     try {
       const supabase = createClient(
         process.env.SUPABASE_URL,
@@ -159,7 +253,7 @@ ${input}
         }
       ]);
     } catch (e) {
-      console.error("Failed to log error:", e);
+      console.error("Supabase logging failed:", e);
     }
 
     return res.status(500).json({
